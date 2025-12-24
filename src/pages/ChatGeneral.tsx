@@ -135,11 +135,21 @@ const SUGGESTED_QA: Array<{ q: string; a: string }> = [
   { q: "ما مدة صلاحية شهادة المحتوى المحلي؟", a: `مدة الصلاحية **19 شهرًا**.` },
 ];
 
+// ✅ Railway base
 const RAG_BASE = import.meta.env.VITE_RAG_BASE?.toString();
-
 if (!RAG_BASE) {
   throw new Error("VITE_RAG_BASE is missing. Set it in Vercel Environment Variables and redeploy.");
 }
+
+// ✅ Optional (if your Railway endpoint requires auth)
+const API_TOKEN =
+  (import.meta.env.VITE_HF_TOKEN as string | undefined) ||
+  (import.meta.env.VITE_OPENAI_KEY as string | undefined) ||
+  "";
+
+// ✅ Optional model id
+const MODEL_ID =
+  (import.meta.env.VITE_MODEL_ID as string | undefined) || "humain-ai/ALLaM-7B-Instruct-preview";
 
 const toText = (v: any) => {
   if (v == null) return "";
@@ -233,7 +243,6 @@ function isGibberish(text: string) {
   return false;
 }
 
-// فلتر “خارج المجال” أخف: ما يمنع الأسئلة العربية القصيرة جدًا
 const DOMAIN_HINTS = [
   "المحتوى",
   "محلي",
@@ -271,10 +280,8 @@ function looksOutOfDomain(text: string) {
   const hasArabic = ARABIC_RE.test(text);
   const hasEnglish = ENGLISH_RE.test(text);
 
-  // إنجليزي بحت = خارج المجال
   if (!hasArabic && hasEnglish) return true;
 
-  // إذا عربي قصير جدًا، لا نحكم عليه خارج المجال (خليه يروح للـRAG)
   if (hasArabic && t.length <= 10) return false;
 
   const hit = DOMAIN_HINTS.some((k) => t.includes(k.toLowerCase()));
@@ -312,13 +319,14 @@ const ChatGeneral = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isSending]);
 
+  // ✅ health check matches Railway docs: GET /health
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`${RAG_BASE}/api/health`, { method: "GET" });
+        const res = await fetch(`${RAG_BASE}/health`, { method: "GET" });
         if (!res.ok) throw new Error(await readErrorText(res));
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         setRagStatus("online");
         setRagInfo(data);
@@ -344,21 +352,30 @@ const ChatGeneral = () => {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch, timestamp: new Date() } : m)));
   };
 
+  // ✅ Call OpenAI-compatible endpoint: POST /v1/chat/completions
   const callRag = async (allMessages: Message[]) => {
     const sanitized = allMessages.filter((m) => !(m.id === 1 && !m.isUser));
     const apiMessages = normalizeForApi(sanitized);
 
     const payload = {
+      model: MODEL_ID,
       messages: apiMessages,
-      k: 5,
       temperature: 0.2,
       max_tokens: 220,
+      stream: false,
     };
 
-    const url = `${RAG_BASE}/api/rag/chat`;
+    const url = `${RAG_BASE}/v1/chat/completions`;
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    };
+    if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
+
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers,
       body: JSON.stringify(payload),
     });
 
@@ -368,11 +385,14 @@ const ChatGeneral = () => {
     }
 
     const data = await res.json().catch(() => null);
-    const text = data?.content;
-    if (!text) throw new Error("رد غير متوقع من RAG (content غير موجود).");
 
-    const sources = (data?.sources || []) as Message["sources"];
-    return { text: text as string, sources };
+    // OpenAI format: choices[0].message.content
+    const text = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? data?.content;
+
+    if (!text) throw new Error("رد غير متوقع (لا يوجد choices[0].message.content).");
+
+    // No RAG sources in proxy response
+    return { text: String(text), sources: undefined as Message["sources"] };
   };
 
   const typewriteIntoMessage = async (messageId: number, fullText: string, sources?: Message["sources"]) => {
@@ -418,7 +438,6 @@ const ChatGeneral = () => {
     setMessages((prev) => [...prev, userMessage]);
     setInputValue("");
 
-    // ✅ 1) أول شيء: لو السؤال من المقترحات أعطي جوابه فورًا (بدون فلترة)
     const instant = QA_MAP[clean];
     if (instant) {
       const id = Date.now() + Math.random();
@@ -427,7 +446,6 @@ const ChatGeneral = () => {
       return;
     }
 
-    // ✅ 2) بعدين نطبّق الفلترة على أي شيء غير المقترحات
     if (shouldFallback(clean)) {
       const id = Date.now() + Math.random();
       setMessages((prev) => [...prev, { id, text: "", isUser: false, timestamp: new Date() }]);
