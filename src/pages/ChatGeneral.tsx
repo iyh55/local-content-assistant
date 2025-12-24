@@ -135,7 +135,11 @@ const SUGGESTED_QA: Array<{ q: string; a: string }> = [
   { q: "ما مدة صلاحية شهادة المحتوى المحلي؟", a: `مدة الصلاحية **19 شهرًا**.` },
 ];
 
-const RAG_BASE = (import.meta as any)?.env?.VITE_RAG_BASE?.toString() || "http://127.0.0.1:8000";
+const RAG_BASE = import.meta.env.VITE_RAG_BASE?.toString();
+
+if (!RAG_BASE) {
+  throw new Error("VITE_RAG_BASE is missing. Set it in Vercel Environment Variables and redeploy.");
+}
 
 const toText = (v: any) => {
   if (v == null) return "";
