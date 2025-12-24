@@ -141,13 +141,13 @@ if (!RAG_BASE) {
   throw new Error("VITE_RAG_BASE is missing. Set it in Vercel Environment Variables and redeploy.");
 }
 
-// ✅ Optional (if your Railway endpoint requires auth)
+// ✅ Token (optional)
 const API_TOKEN =
   (import.meta.env.VITE_HF_TOKEN as string | undefined) ||
   (import.meta.env.VITE_OPENAI_KEY as string | undefined) ||
   "";
 
-// ✅ Optional model id
+// ✅ Model (optional)
 const MODEL_ID =
   (import.meta.env.VITE_MODEL_ID as string | undefined) || "humain-ai/ALLaM-7B-Instruct-preview";
 
@@ -281,7 +281,6 @@ function looksOutOfDomain(text: string) {
   const hasEnglish = ENGLISH_RE.test(text);
 
   if (!hasArabic && hasEnglish) return true;
-
   if (hasArabic && t.length <= 10) return false;
 
   const hit = DOMAIN_HINTS.some((k) => t.includes(k.toLowerCase()));
@@ -292,12 +291,7 @@ const ChatGeneral = () => {
   const navigate = useNavigate();
 
   const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      text: BOT_FALLBACK,
-      isUser: false,
-      timestamp: new Date(),
-    },
+    { id: 1, text: BOT_FALLBACK, isUser: false, timestamp: new Date() },
   ]);
 
   const [inputValue, setInputValue] = useState("");
@@ -319,7 +313,7 @@ const ChatGeneral = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isSending]);
 
-  // ✅ health check matches Railway docs: GET /health
+  // ✅ health check: GET /health
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -352,7 +346,7 @@ const ChatGeneral = () => {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch, timestamp: new Date() } : m)));
   };
 
-  // ✅ Call OpenAI-compatible endpoint: POST /v1/chat/completions
+  // ✅ OpenAI-compatible: POST /v1/chat/completions
   const callRag = async (allMessages: Message[]) => {
     const sanitized = allMessages.filter((m) => !(m.id === 1 && !m.isUser));
     const apiMessages = normalizeForApi(sanitized);
@@ -371,13 +365,22 @@ const ChatGeneral = () => {
       "Content-Type": "application/json",
       Accept: "application/json",
     };
-    if (API_TOKEN) headers.Authorization = `Bearer ${API_TOKEN}`;
+
+    // ✅ لا ترسل Authorization إلا إذا فعلاً عندك توكن
+    if (API_TOKEN && API_TOKEN.trim().length > 0) {
+      headers.Authorization = `Bearer ${API_TOKEN.trim()}`;
+    }
+
+    // ✅ Timeout 30s
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 30000);
 
     const res = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify(payload),
-    });
+      signal: controller.signal,
+    }).finally(() => window.clearTimeout(timer));
 
     if (!res.ok) {
       const errText = await readErrorText(res);
@@ -386,12 +389,14 @@ const ChatGeneral = () => {
 
     const data = await res.json().catch(() => null);
 
-    // OpenAI format: choices[0].message.content
-    const text = data?.choices?.[0]?.message?.content ?? data?.choices?.[0]?.text ?? data?.content;
+    const text =
+      data?.choices?.[0]?.message?.content ??
+      data?.choices?.[0]?.text ??
+      data?.content ??
+      "";
 
     if (!text) throw new Error("رد غير متوقع (لا يوجد choices[0].message.content).");
 
-    // No RAG sources in proxy response
     return { text: String(text), sources: undefined as Message["sources"] };
   };
 
@@ -479,12 +484,10 @@ const ChatGeneral = () => {
       <style>{`
         .lc-scroll { direction: ltr; }
         .lc-scroll > * { direction: rtl; }
-
         .lc-scroll::-webkit-scrollbar { width: 10px; }
         .lc-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,0.12); border-radius: 999px; }
         .lc-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.38); border-radius: 999px; }
         .lc-scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.58); }
-
         html, body { height: 100%; }
       `}</style>
 
